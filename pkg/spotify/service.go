@@ -13,6 +13,7 @@ type SpotifyServiceServer struct {
 	authManager   *AuthManager
 	tokenRefresh  *TokenRefresher
 	tokenStore    TokenStore
+	apiClient     *SpotifyAPIClient
 }
 
 // NewSpotifyServiceServer creates a new Spotify service server
@@ -21,6 +22,7 @@ func NewSpotifyServiceServer(authMgr *AuthManager, tokenRefresher *TokenRefreshe
 		authManager:  authMgr,
 		tokenRefresh: tokenRefresher,
 		tokenStore:   store,
+		apiClient:    NewSpotifyAPIClient(),
 	}
 }
 
@@ -123,6 +125,177 @@ func (s *SpotifyServiceServer) RefreshToken(ctx context.Context, req *pb.TokenRe
 		Scope:       newToken.Scope,
 		Timestamp:   newToken.Timestamp,
 	}, nil
+}
+
+// GetMetadata retrieves track metadata from Spotify API
+// Implements AC1: Track metadata (name, artist, duration, preview URL) is retrieved from Spotify API and returned via gRPC
+func (s *SpotifyServiceServer) GetMetadata(ctx context.Context, req *pb.GetMetadataRequest) (*pb.TrackMetadata, error) {
+	if req == nil || req.TrackId == "" {
+		return nil, fmt.Errorf("track_id is required")
+	}
+
+	// Check if token is provided directly or needs to be refreshed
+	accessToken := req.AccessToken
+	if accessToken == "" {
+		return nil, fmt.Errorf("access_token is required")
+	}
+
+	// Fetch metadata from Spotify API
+	metadata, err := s.apiClient.FetchTrackMetadata(ctx, req.TrackId, accessToken)
+	if err != nil {
+		// Check if token is expired and needs refresh
+		if IsTokenExpired(err) {
+			return nil, TokenExpired(fmt.Errorf("access token expired: %w", err))
+		}
+		return nil, fmt.Errorf("failed to fetch track metadata: %w", err)
+	}
+
+	// Map API response to protobuf message
+	return mapMetadataToProto(metadata), nil
+}
+
+// GetFeatures retrieves audio features for a track from Spotify API
+// Implements AC2: Audio features (tempo, key, energy, danceability, valence) are fetched and mapped to protobuf messages
+func (s *SpotifyServiceServer) GetFeatures(ctx context.Context, req *pb.GetFeaturesRequest) (*pb.AudioFeatures, error) {
+	if req == nil || req.TrackId == "" {
+		return nil, fmt.Errorf("track_id is required")
+	}
+
+	// Check if token is provided directly or needs to be refreshed
+	accessToken := req.AccessToken
+	if accessToken == "" {
+		return nil, fmt.Errorf("access_token is required")
+	}
+
+	// Fetch audio features from Spotify API
+	features, err := s.apiClient.FetchAudioFeatures(ctx, req.TrackId, accessToken)
+	if err != nil {
+		// Check if token is expired and needs refresh
+		if IsTokenExpired(err) {
+			return nil, TokenExpired(fmt.Errorf("access token expired: %w", err))
+		}
+		return nil, fmt.Errorf("failed to fetch audio features: %w", err)
+	}
+
+	// Map API response to protobuf message
+	return mapFeaturesToProto(features), nil
+}
+
+// GetPreviewURL retrieves the preview URL for a track
+// Implements AC4: Preview unavailable error is returned when a track has no preview URL instead of returning null
+func (s *SpotifyServiceServer) GetPreviewURL(ctx context.Context, req *pb.GetPreviewURLRequest) (*pb.PreviewURLResponse, error) {
+	if req == nil || req.TrackId == "" {
+		return nil, fmt.Errorf("track_id is required")
+	}
+
+	// Check if token is provided directly or needs to be refreshed
+	accessToken := req.AccessToken
+	if accessToken == "" {
+		return nil, fmt.Errorf("access_token is required")
+	}
+
+	// Fetch track metadata to get preview URL
+	metadata, err := s.apiClient.FetchTrackMetadata(ctx, req.TrackId, accessToken)
+	if err != nil {
+		// Check if token is expired and needs refresh
+		if IsTokenExpired(err) {
+			return nil, TokenExpired(fmt.Errorf("access token expired: %w", err))
+		}
+		return nil, fmt.Errorf("failed to fetch track metadata: %w", err)
+	}
+
+	// Check if preview URL is available
+	if metadata.PreviewURL == "" {
+		return nil, PreviewUnavailable(fmt.Errorf("preview URL is not available for track %s", req.TrackId))
+	}
+
+	return &pb.PreviewURLResponse{
+		TrackId:     req.TrackId,
+		PreviewUrl:  metadata.PreviewURL,
+		IsAvailable: true,
+	}, nil
+}
+
+// mapMetadataToProto converts API response to protobuf TrackMetadata message
+func mapMetadataToProto(apiResp *TrackMetadataResponse) *pb.TrackMetadata {
+	// Map artists
+	artists := make([]*pb.Artist, 0, len(apiResp.Artists))
+	for _, artist := range apiResp.Artists {
+		artists = append(artists, &pb.Artist{
+			Id:                   artist.ID,
+			Name:                 artist.Name,
+			Uri:                  artist.URI,
+			ExternalUrlsSpotify:  artist.ExternalURLs["spotify"],
+		})
+	}
+
+	// Map album artists
+	albumArtists := make([]*pb.Artist, 0, len(apiResp.Album.Artists))
+	for _, artist := range apiResp.Album.Artists {
+		albumArtists = append(albumArtists, &pb.Artist{
+			Id:                   artist.ID,
+			Name:                 artist.Name,
+			Uri:                  artist.URI,
+			ExternalUrlsSpotify:  artist.ExternalURLs["spotify"],
+		})
+	}
+
+	// Map album images
+	images := make([]*pb.Image, 0, len(apiResp.Album.Images))
+	for _, img := range apiResp.Album.Images {
+		images = append(images, &pb.Image{
+			Url:    img.URL,
+			Height: img.Height,
+			Width:  img.Width,
+		})
+	}
+
+	// Map album
+	album := &pb.Album{
+		Id:           apiResp.Album.ID,
+		Name:         apiResp.Album.Name,
+		ReleaseDate:  apiResp.Album.ReleaseDate,
+		Uri:          apiResp.Album.URI,
+		Images:       images,
+		Artists:      albumArtists,
+	}
+
+	// Create and return protobuf message
+	return &pb.TrackMetadata{
+		Id:                   apiResp.ID,
+		Name:                 apiResp.Name,
+		Album:                album,
+		Artists:              artists,
+		DurationMs:           apiResp.Duration,
+		Explicit:             apiResp.Explicit,
+		ExternalIdsIsrc:      apiResp.ExternalIDs["isrc"],
+		ExternalUrlsSpotify:  apiResp.ExternalURLs["spotify"],
+		Uri:                  apiResp.URI,
+		Popularity:           apiResp.Popularity,
+		PreviewUrl:           apiResp.PreviewURL,
+		TrackNumber:          apiResp.TrackNumber,
+		DiscNumber:           apiResp.DiscNumber,
+	}
+}
+
+// mapFeaturesToProto converts API response to protobuf AudioFeatures message
+func mapFeaturesToProto(apiResp *AudioFeaturesResponse) *pb.AudioFeatures {
+	return &pb.AudioFeatures{
+		Id:               apiResp.ID,
+		Acousticness:     apiResp.Acousticness,
+		Danceability:     apiResp.Danceability,
+		DurationMs:       apiResp.Duration,
+		Energy:           apiResp.Energy,
+		Instrumentalness: apiResp.Instrumentalness,
+		Key:              apiResp.Key,
+		Liveness:         apiResp.Liveness,
+		Loudness:         apiResp.Loudness,
+		Mode:             apiResp.Mode,
+		Speechiness:      apiResp.Speechiness,
+		Tempo:            apiResp.Tempo,
+		TimeSignature:    apiResp.TimeSignature,
+		Valence:          apiResp.Valence,
+	}
 }
 
 // GetStoredToken retrieves the currently stored token for a user (without exposing secrets in logs)
