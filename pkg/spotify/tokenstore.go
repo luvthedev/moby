@@ -1,7 +1,18 @@
 package spotify
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"cloud.google.com/go/storage"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/moby/moby/errdefs"
 )
 
 // Token represents a Spotify API token with metadata
@@ -38,48 +49,88 @@ type TokenStore interface {
 
 // S3TokenStore implements TokenStore using AWS S3
 type S3TokenStore struct {
-	// Configuration would include bucket name, region, and AWS client
 	bucketName string
-	// ... additional S3 client fields
+	client     *s3.Client
 }
 
 // NewS3TokenStore creates a new S3-based token store
+// client: configured AWS S3 client
 // bucketName: the S3 bucket name where tokens will be stored
-// region: the AWS region
-func NewS3TokenStore(bucketName, region string) *S3TokenStore {
+func NewS3TokenStore(client *s3.Client, bucketName string) *S3TokenStore {
 	return &S3TokenStore{
 		bucketName: bucketName,
+		client:     client,
 	}
 }
 
-// StoreToken saves a token to S3
+// StoreToken saves a token to S3 with encryption at rest
 func (s *S3TokenStore) StoreToken(ctx context.Context, key string, token *Token) error {
-	// Implementation would serialize token and upload to S3
-	// Example error handling:
-	// return errdefs.System(fmt.Errorf("failed to store token in S3: %w", err))
+	data, err := json.Marshal(token)
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to marshal token: %w", err))
+	}
+
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+		// Enable server-side encryption for security
+		ServerSideEncryption: types.ServerSideEncryptionAes256,
+	})
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to store token in S3: %w", err))
+	}
+
 	return nil
 }
 
 // RetrieveToken retrieves a token from S3
 func (s *S3TokenStore) RetrieveToken(ctx context.Context, key string) (*Token, error) {
-	// Implementation would download from S3 and deserialize
-	// Example error handling:
-	// if err != nil && errors.Is(err, s3.ErrNoSuchKey) {
-	//     return nil, errdefs.NotFound(fmt.Errorf("token not found: %w", err))
-	// }
-	return nil, nil
+	result, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, errdefs.NotFound(fmt.Errorf("token not found: %w", err))
+	}
+	defer result.Body.Close()
+
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to read token from S3: %w", err))
+	}
+
+	var token Token
+	if err := json.Unmarshal(data, &token); err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to unmarshal token: %w", err))
+	}
+
+	return &token, nil
 }
 
 // DeleteToken removes a token from S3
 func (s *S3TokenStore) DeleteToken(ctx context.Context, key string) error {
-	// Implementation would delete object from S3
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to delete token from S3: %w", err))
+	}
 	return nil
 }
 
 // TokenExists checks if a token exists in S3
 func (s *S3TokenStore) TokenExists(ctx context.Context, key string) (bool, error) {
-	// Implementation would check object existence in S3
-	return false, nil
+	_, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Close closes the S3 token store
@@ -89,85 +140,156 @@ func (s *S3TokenStore) Close() error {
 
 // GCSTokenStore implements TokenStore using Google Cloud Storage
 type GCSTokenStore struct {
-	// Configuration would include bucket name and GCS client
 	bucketName string
-	// ... additional GCS client fields
+	client     *storage.Client
 }
 
 // NewGCSTokenStore creates a new GCS-based token store
+// client: configured Google Cloud Storage client
 // bucketName: the GCS bucket name where tokens will be stored
-func NewGCSTokenStore(bucketName string) *GCSTokenStore {
+func NewGCSTokenStore(client *storage.Client, bucketName string) *GCSTokenStore {
 	return &GCSTokenStore{
 		bucketName: bucketName,
+		client:     client,
 	}
 }
 
-// StoreToken saves a token to GCS
+// StoreToken saves a token to GCS with encryption at rest
 func (g *GCSTokenStore) StoreToken(ctx context.Context, key string, token *Token) error {
-	// Implementation would serialize token and upload to GCS
+	data, err := json.Marshal(token)
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to marshal token: %w", err))
+	}
+
+	wc := g.client.Bucket(g.bucketName).Object(key).NewWriter(ctx)
+	wc.ContentType = "application/json"
+
+	if _, err := wc.Write(data); err != nil {
+		return errdefs.System(fmt.Errorf("failed to store token in GCS: %w", err))
+	}
+
+	if err := wc.Close(); err != nil {
+		return errdefs.System(fmt.Errorf("failed to close GCS writer: %w", err))
+	}
+
 	return nil
 }
 
 // RetrieveToken retrieves a token from GCS
 func (g *GCSTokenStore) RetrieveToken(ctx context.Context, key string) (*Token, error) {
-	// Implementation would download from GCS and deserialize
-	return nil, nil
+	rc, err := g.client.Bucket(g.bucketName).Object(key).NewReader(ctx)
+	if err != nil {
+		return nil, errdefs.NotFound(fmt.Errorf("token not found: %w", err))
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to read token from GCS: %w", err))
+	}
+
+	var token Token
+	if err := json.Unmarshal(data, &token); err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to unmarshal token: %w", err))
+	}
+
+	return &token, nil
 }
 
 // DeleteToken removes a token from GCS
 func (g *GCSTokenStore) DeleteToken(ctx context.Context, key string) error {
-	// Implementation would delete object from GCS
+	if err := g.client.Bucket(g.bucketName).Object(key).Delete(ctx); err != nil {
+		return errdefs.System(fmt.Errorf("failed to delete token from GCS: %w", err))
+	}
 	return nil
 }
 
 // TokenExists checks if a token exists in GCS
 func (g *GCSTokenStore) TokenExists(ctx context.Context, key string) (bool, error) {
-	// Implementation would check object existence in GCS
-	return false, nil
+	_, err := g.client.Bucket(g.bucketName).Object(key).Attrs(ctx)
+	if err != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Close closes the GCS token store
 func (g *GCSTokenStore) Close() error {
-	return nil
+	return g.client.Close()
 }
 
 // AzureBlobTokenStore implements TokenStore using Azure Blob Storage
 type AzureBlobTokenStore struct {
-	// Configuration would include container name and Azure client
 	containerName string
-	// ... additional Azure client fields
+	client        *azblob.ContainerClient
 }
 
 // NewAzureBlobTokenStore creates a new Azure Blob Storage-based token store
+// client: configured Azure blob container client
 // containerName: the Azure container name where tokens will be stored
-func NewAzureBlobTokenStore(containerName string) *AzureBlobTokenStore {
+func NewAzureBlobTokenStore(client *azblob.ContainerClient) *AzureBlobTokenStore {
 	return &AzureBlobTokenStore{
-		containerName: containerName,
+		containerName: client.ContainerName(),
+		client:        client,
 	}
 }
 
-// StoreToken saves a token to Azure Blob Storage
+// StoreToken saves a token to Azure Blob Storage with encryption at rest
 func (a *AzureBlobTokenStore) StoreToken(ctx context.Context, key string, token *Token) error {
-	// Implementation would serialize token and upload to Azure
+	data, err := json.Marshal(token)
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to marshal token: %w", err))
+	}
+
+	blobClient := a.client.NewBlockBlobClient(key)
+	_, err = blobClient.Upload(ctx, io.NopCloser(bytes.NewReader(data)), nil)
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to store token in Azure: %w", err))
+	}
+
 	return nil
 }
 
 // RetrieveToken retrieves a token from Azure Blob Storage
 func (a *AzureBlobTokenStore) RetrieveToken(ctx context.Context, key string) (*Token, error) {
-	// Implementation would download from Azure and deserialize
-	return nil, nil
+	blobClient := a.client.NewBlockBlobClient(key)
+	download, err := blobClient.Download(ctx, nil)
+	if err != nil {
+		return nil, errdefs.NotFound(fmt.Errorf("token not found: %w", err))
+	}
+	defer download.Body.Close()
+
+	data, err := io.ReadAll(download.Body)
+	if err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to read token from Azure: %w", err))
+	}
+
+	var token Token
+	if err := json.Unmarshal(data, &token); err != nil {
+		return nil, errdefs.System(fmt.Errorf("failed to unmarshal token: %w", err))
+	}
+
+	return &token, nil
 }
 
 // DeleteToken removes a token from Azure Blob Storage
 func (a *AzureBlobTokenStore) DeleteToken(ctx context.Context, key string) error {
-	// Implementation would delete blob from Azure
+	blobClient := a.client.NewBlockBlobClient(key)
+	_, err := blobClient.Delete(ctx, nil)
+	if err != nil {
+		return errdefs.System(fmt.Errorf("failed to delete token from Azure: %w", err))
+	}
 	return nil
 }
 
 // TokenExists checks if a token exists in Azure Blob Storage
 func (a *AzureBlobTokenStore) TokenExists(ctx context.Context, key string) (bool, error) {
-	// Implementation would check blob existence in Azure
-	return false, nil
+	blobClient := a.client.NewBlockBlobClient(key)
+	_, err := blobClient.GetProperties(ctx, nil)
+	if err != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Close closes the Azure Blob token store

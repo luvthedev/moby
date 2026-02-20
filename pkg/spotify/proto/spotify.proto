@@ -4,12 +4,22 @@ package spotify;
 
 option go_package = "github.com/moby/moby/pkg/spotify/v1;spotify";
 
+// GetAuthorizationURLRequest is used to initiate OAuth flow
+message GetAuthorizationURLRequest {
+  string user_id = 1;  // Optional: user context for logging
+}
+
+// GetAuthorizationURLResponse returns the authorization URL and state token
+message GetAuthorizationURLResponse {
+  string auth_url = 1;      // The URL to redirect user to for authorization
+  string state_token = 2;   // State token for CSRF protection
+}
+
 // AuthRequest contains credentials for Spotify authentication
 message AuthRequest {
-  string client_id = 1;
-  string client_secret = 2;
-  string redirect_uri = 3;
-  string code = 4;
+  string code = 1;           // Authorization code from OAuth callback
+  string user_id = 2;        // User ID for token storage
+  string state_token = 3;    // State token for CSRF validation
 }
 
 // AuthResponse contains the authentication result with access token and metadata
@@ -58,7 +68,10 @@ message GetPreviewURLRequest {
 
 // SpotifyService provides gRPC endpoints for Spotify authentication and data retrieval
 service SpotifyService {
-  // Authenticate performs OAuth2 authentication with Spotify
+  // GetAuthorizationURL initiates OAuth flow and returns authorization URL with state token
+  rpc GetAuthorizationURL(GetAuthorizationURLRequest) returns (GetAuthorizationURLResponse);
+
+  // Authenticate performs OAuth2 authentication with Spotify by exchanging authorization code
   rpc Authenticate(AuthRequest) returns (AuthResponse);
 
   // RefreshToken refreshes an expired access token
