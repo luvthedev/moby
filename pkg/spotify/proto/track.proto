@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package spotify;
+
+option go_package = "github.com/moby/moby/pkg/spotify/v1;spotify";
+
+// Image represents an image for a track, album, or artist
+message Image {
+  string url = 1;
+  int32 height = 2;
+  int32 width = 3;
+}
+
+// Artist represents a Spotify artist
+message Artist {
+  string id = 1;
+  string name = 2;
+  string uri = 3;
+  string external_urls_spotify = 4;
+}
+
+// Album represents a Spotify album
+message Album {
+  string id = 1;
+  string name = 2;
+  string release_date = 3;
+  string uri = 4;
+  repeated Image images = 5;
+  repeated Artist artists = 6;
+}
+
+// TrackMetadata contains full metadata information for a track
+message TrackMetadata {
+  string id = 1;
+  string name = 2;
+  Album album = 3;
+  repeated Artist artists = 4;
+  int32 duration_ms = 5;
+  bool explicit = 6;
+  string external_ids_isrc = 7;
+  string external_urls_spotify = 8;
+  string uri = 9;
+  int32 popularity = 10;
+  string preview_url = 11;
+  int32 track_number = 12;
+  int32 disc_number = 13;
+}
+
+// AudioFeatures contains audio analysis features for a track from Spotify's API
+message AudioFeatures {
+  string id = 1;
+  float acousticness = 2;      // 0.0 to 1.0: confidence measure from 0.0 to 1.0
+  float danceability = 3;      // 0.0 to 1.0: suitability for dancing
+  int32 duration_ms = 4;       // duration in milliseconds
+  float energy = 5;            // 0.0 to 1.0: intensity and activity
+  float instrumentalness = 6;  // 0.0 to 1.0: likelihood of no vocals
+  int32 key = 7;              // pitch class notation (-1 = no key, 0-11 = C to B)
+  float liveness = 8;          // 0.0 to 1.0: presence of audience
+  float loudness = 9;          // decibels (dB), typically -60 to 0
+  int32 mode = 10;            // 0 = minor, 1 = major
+  float speechiness = 11;      // 0.0 to 1.0: presence of spoken words
+  float tempo = 12;            // beats per minute (BPM)
+  int32 time_signature = 13;   // estimated time signature
+  float valence = 14;          // 0.0 to 1.0: musical positiveness/happiness
+}
+
+// PreviewURLResponse contains the preview URL for a track
+message PreviewURLResponse {
+  string track_id = 1;
+  string preview_url = 2;
+  bool is_available = 3;
+}
