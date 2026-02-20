@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package spotify;
+
+option go_package = "github.com/moby/moby/pkg/spotify/v1;spotify";
+
+// AuthRequest contains credentials for Spotify authentication
+message AuthRequest {
+  string client_id = 1;
+  string client_secret = 2;
+  string redirect_uri = 3;
+  string code = 4;
+}
+
+// AuthResponse contains the authentication result with access token and metadata
+message AuthResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int32 expires_in = 3;
+  string refresh_token = 4;
+  string scope = 5;
+  int64 timestamp = 6;  // Unix timestamp of when token was created
+}
+
+// TokenRefreshRequest is used to refresh an expired access token
+message TokenRefreshRequest {
+  string refresh_token = 1;
+  string client_id = 2;
+  string client_secret = 3;
+}
+
+// TokenRefreshResponse contains the refreshed authentication data
+message TokenRefreshResponse {
+  string access_token = 1;
+  string token_type = 2;
+  int32 expires_in = 3;
+  string scope = 4;
+  int64 timestamp = 5;  // Unix timestamp of when token was refreshed
+}
+
+// GetMetadataRequest retrieves metadata for a specific track
+message GetMetadataRequest {
+  string track_id = 1;
+  string access_token = 2;
+}
+
+// GetFeaturesRequest retrieves audio features for a specific track
+message GetFeaturesRequest {
+  string track_id = 1;
+  string access_token = 2;
+}
+
+// GetPreviewURLRequest retrieves the preview URL for a track
+message GetPreviewURLRequest {
+  string track_id = 1;
+  string access_token = 2;
+}
+
+// SpotifyService provides gRPC endpoints for Spotify authentication and data retrieval
+service SpotifyService {
+  // Authenticate performs OAuth2 authentication with Spotify
+  rpc Authenticate(AuthRequest) returns (AuthResponse);
+
+  // RefreshToken refreshes an expired access token
+  rpc RefreshToken(TokenRefreshRequest) returns (TokenRefreshResponse);
+
+  // GetMetadata retrieves track metadata from Spotify
+  rpc GetMetadata(GetMetadataRequest) returns (TrackMetadata);
+
+  // GetFeatures retrieves audio features for a track from Spotify
+  rpc GetFeatures(GetFeaturesRequest) returns (AudioFeatures);
+
+  // GetPreviewURL retrieves the preview URL for a track
+  rpc GetPreviewURL(GetPreviewURLRequest) returns (PreviewURLResponse);
+}
