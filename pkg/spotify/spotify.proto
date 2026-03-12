@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package spotify;
+
+option go_package = "github.com/moby/pkg/spotify";
+
+import "google/protobuf/timestamp.proto";
+
+// SpotifyService provides methods for Spotify authentication
+// and track data retrieval.
+service SpotifyService {
+  // AuthenticateUser initiates the OAuth2 authentication flow
+  // with Spotify and returns access credentials.
+  rpc AuthenticateUser(AuthRequest) returns (AuthResponse);
+
+  // GetTrackMetadata retrieves metadata for a given Spotify track.
+  rpc GetTrackMetadata(TrackRequest) returns (TrackMetadata);
+
+  // GetAudioFeatures retrieves pre-computed audio features
+  // (tempo, key, energy, etc.) for a given Spotify track.
+  rpc GetAudioFeatures(TrackRequest) returns (AudioFeatures);
+
+  // GetPreviewURL retrieves the 30-second preview clip URL
+  // for a given Spotify track.
+  rpc GetPreviewURL(TrackRequest) returns (PreviewResponse);
+
+  // RefreshToken exchanges a refresh token for a new access token.
+  rpc RefreshToken(RefreshTokenRequest) returns (AuthResponse);
+}
+
+// AuthRequest contains the parameters needed to initiate
+// Spotify OAuth2 authentication.
+message AuthRequest {
+  // client_id is the Spotify application client identifier.
+  string client_id = 1;
+  // redirect_uri is the callback URI for the OAuth2 flow.
+  string redirect_uri = 2;
+  // authorization_code is the code received from the OAuth2 callback.
+  string authorization_code = 3;
+}
+
+// AuthResponse contains the credentials returned after
+// successful Spotify authentication.
+message AuthResponse {
+  // access_token is the OAuth2 access token for Spotify API calls.
+  string access_token = 1;
+  // refresh_token is used to obtain new access tokens when the
+  // current one expires.
+  string refresh_token = 2;
+  // expires_at is the timestamp when the access token expires.
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// TrackRequest identifies a Spotify track by its ID.
+message TrackRequest {
+  // track_id is the Spotify track identifier.
+  string track_id = 1;
+}
+
+// TrackMetadata contains descriptive information about a Spotify track.
+message TrackMetadata {
+  // id is the Spotify track identifier.
+  string id = 1;
+  // name is the track title.
+  string name = 2;
+  // artist is the primary artist name.
+  string artist = 3;
+  // album is the album name.
+  string album = 4;
+  // duration_ms is the track duration in milliseconds.
+  int64 duration_ms = 5;
+  // preview_url is the URL for the 30-second preview clip.
+  // May be empty if no preview is available.
+  string preview_url = 6;
+}
+
+// AudioFeatures contains pre-computed audio analysis data
+// for a Spotify track.
+message AudioFeatures {
+  // track_id is the Spotify track identifier.
+  string track_id = 1;
+  // tempo is the estimated tempo in beats per minute.
+  float tempo = 2;
+  // key is the estimated musical key (0=C, 1=C#/Db, ..., 11=B).
+  int32 key = 3;
+  // energy is a perceptual measure of intensity (0.0 to 1.0).
+  float energy = 4;
+  // danceability describes how suitable a track is for dancing (0.0 to 1.0).
+  float danceability = 5;
+  // valence describes the musical positiveness (0.0 to 1.0).
+  float valence = 6;
+}
+
+// PreviewResponse contains the preview clip URL for a track.
+message PreviewResponse {
+  // track_id is the Spotify track identifier.
+  string track_id = 1;
+  // preview_url is the URL for the 30-second preview clip.
+  string preview_url = 2;
+  // duration_ms is the duration of the preview clip in milliseconds.
+  int64 duration_ms = 3;
+}
+
+// RefreshTokenRequest contains the parameters needed to refresh
+// an expired access token.
+message RefreshTokenRequest {
+  // refresh_token is the previously issued refresh token.
+  string refresh_token = 1;
+  // client_id is the Spotify application client identifier.
+  string client_id = 2;
+}
